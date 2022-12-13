@@ -61,6 +61,7 @@ public class UIDOperatorVerticle extends AbstractVerticle{
     private final JsonObject config;
     private final AuthMiddleware auth;
     private final IKeyStore keyStore;
+    private final ITokenEncoder encoder;
     private final IKeyAclProvider keyAclProvider;
     private final ISaltProvider saltProvider;
     private final IOptOutStore optOutStore;
@@ -88,6 +89,7 @@ public class UIDOperatorVerticle extends AbstractVerticle{
         this.healthComponent.setHealthStatus(false, "not started");
         this.auth = new AuthMiddleware(clientKeyProvider);
         this.keyStore = keyStore;
+        this.encoder = new EncryptedTokenEncoder(keyStore);
         this.keyAclProvider = keyAclProvider;
         this.saltProvider = saltProvider;
         this.optOutStore = optOutStore;
@@ -108,7 +110,7 @@ public class UIDOperatorVerticle extends AbstractVerticle{
             this.config,
             this.optOutStore,
             this.saltProvider,
-            new EncryptedTokenEncoder(this.keyStore),
+            this.encoder,
             this.clock,
             this.identityScope
         );
@@ -291,7 +293,7 @@ public class UIDOperatorVerticle extends AbstractVerticle{
         }
 
         try {
-            RefreshResponse r = idService.refreshIdentity(refreshToken);
+            final RefreshResponse r = this.refreshIdentity(rc, refreshToken);
             if (!r.isRefreshed()) {
                 if (r.isOptOut() || r.isDeprecated()) {
                     ResponseUtil.SuccessNoBody(ResponseStatus.OptOut, rc);
@@ -318,7 +320,7 @@ public class UIDOperatorVerticle extends AbstractVerticle{
     private void handleTokenRefreshV2(RoutingContext rc) {
         try {
             String tokenStr = (String) rc.data().get("request");
-            RefreshResponse r = idService.refreshIdentity(tokenStr);
+            final RefreshResponse r = this.refreshIdentity(rc, tokenStr);
             if (!r.isRefreshed()) {
                 if (r.isOptOut() || r.isDeprecated()) {
                     ResponseUtil.SuccessNoBodyV2(ResponseStatus.OptOut, rc);
@@ -494,7 +496,7 @@ public class UIDOperatorVerticle extends AbstractVerticle{
         }
 
         try {
-            final RefreshResponse r = this.idService.refreshIdentity(tokenList.get(0));
+            final RefreshResponse r = this.refreshIdentity(rc, tokenList.get(0));
             sendJsonResponse(rc, toJson(r.getTokens()));
         } catch (Exception e) {
             LOGGER.error(e);
@@ -1040,13 +1042,29 @@ public class UIDOperatorVerticle extends AbstractVerticle{
         ds.record(inputCount);
     }
 
+    private RefreshResponse refreshIdentity(RoutingContext rc, String tokenStr) {
+        final RefreshToken refreshToken;
+        try {
+            refreshToken = this.encoder.decodeRefreshToken(tokenStr);
+        } catch (Throwable t) {
+            return RefreshResponse.Invalid;
+        }
+        if (refreshToken == null) {
+            return RefreshResponse.Invalid;
+        }
+        rc.put("site-id", refreshToken.publisherIdentity.siteId);
+        return this.idService.refreshIdentity(refreshToken);
+    }
+
     private void recordRefreshDurationStats(RoutingContext rc, Duration durationSinceLastRefresh) {
         String apiContact = getApiContact(rc);
+        Integer siteId = rc.get("site-id");
 
         DistributionSummary ds = _refreshDurationMetricSummaries.computeIfAbsent(apiContact, k ->
             DistributionSummary
                     .builder("uid2.token_refresh_duration_seconds")
                     .description("duration between token refreshes")
+                    .tag("site_id", String.valueOf(siteId))
                     .tag("api_contact", apiContact)
                     .register(Metrics.globalRegistry)
         );
