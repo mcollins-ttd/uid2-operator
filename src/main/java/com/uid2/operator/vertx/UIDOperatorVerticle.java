@@ -307,7 +307,7 @@ public class UIDOperatorVerticle extends AbstractVerticle{
         final String encryptedEmail = body.getString("email");
         final String iv = body.getString("iv");
         final String subscriptionId = body.getString("subscription_id");
-        final String clientPublicKeyString = body.getString("publicKey");
+        final String clientPublicKeyString = body.getString("public_key");
 
         final byte[] clientPublicKeyBytes = Base64.getDecoder().decode(clientPublicKeyString);
 
